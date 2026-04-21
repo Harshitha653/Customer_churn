@@ -87,6 +87,42 @@ def numeric_distribution_summary_by_churn(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def ensure_numeric_by_churn_figure() -> None:
+    """Write `02_numeric_by_churn.png` if missing (fresh clone / Cloud without committed PNGs)."""
+    out = FIGURES_DIR / "02_numeric_by_churn.png"
+    if out.exists():
+        return
+    csv_path = BASE_DIR / "data" / "Telco_churn_cleaned.csv"
+    if not csv_path.exists():
+        return
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(csv_path)
+    fig, axes = plt.subplots(2, 1, figsize=(5.4, 4.6))
+    specs = [("Tenure Months", "Tenure (months)"), ("Monthly Charges", "Monthly charges ($)")]
+    for ax, (col, xlabel) in zip(axes, specs):
+        for val, name, color in [(0, "Stayed", "#2ecc71"), (1, "Churned", "#e74c3c")]:
+            s = df.loc[df["Churn"] == val, col]
+            ax.hist(
+                s,
+                bins=28,
+                alpha=0.55,
+                label=name,
+                color=color,
+                edgecolor="white",
+                linewidth=0.25,
+            )
+        ax.set_ylabel("Count")
+        ax.set_xlabel(xlabel)
+        ax.legend(loc="upper right", fontsize=8)
+    fig.suptitle("Numeric distributions by churn status", fontsize=11, y=1.02)
+    fig.tight_layout()
+    try:
+        fig.savefig(out, dpi=96, bbox_inches="tight")
+    except OSError:
+        pass
+    plt.close(fig)
+
+
 def show_static_figure(filename: str, caption: str | None = None) -> None:
     p = _fig_path(filename)
     if p.exists():
@@ -130,7 +166,7 @@ def render_intro() -> None:
     with st.expander("What “success” means for us", expanded=False):
         st.markdown(
             "- A **clear story** leaders can follow without reading code.\n"
-            "- **Predictions** that are good enough to prioritize teams’ time.\n"
+            "- Accurate Churn **predictions** to maximize teams' workload efficiency.\n"
             "- **Transparency** so we can explain *why* someone is flagged.\n"
             "- A **decision layer** that goes beyond a single probability score."
         )
@@ -151,7 +187,7 @@ def render_dataset() -> None:
     )
     st.markdown(
         "[Download the original dataset on Kaggle](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) "
-        "(free account). The project ships a **cleaned** version in `data/Telco_churn_cleaned.csv`."
+        "(free account)."
     )
     eng = get_engine()
     df = eng.df_clean
@@ -165,11 +201,11 @@ def render_dataset() -> None:
     st.subheader("Preview: first rows (head)")
     st.dataframe(df.head(), use_container_width=True)
 
-    st.subheader("Summary in plain language")
+    st.subheader("Summary")
     st.markdown(
         "The cleaned file is almost entirely **numeric flags and amounts** (categories were turned into 0/1 columns). "
-        "Below is a **readable snapshot** of the fields that matter most for “who pays what” and “how long they’ve stayed”—"
-        "not a wall of `describe()` output."
+        "Below is a **readable snapshot** of the fields that matter most for “who pays what” and “how long they’ve stayed”."
+       
     )
     story_cols = [
         "Tenure Months",
@@ -733,6 +769,7 @@ def main() -> None:
         page_icon="📡",
         layout="wide",
     )
+    ensure_numeric_by_churn_figure()
 
     with st.sidebar:
         st.markdown("### Where do you want to go?")
@@ -746,7 +783,10 @@ def main() -> None:
             "**Data source:** [Kaggle — Telco Customer Churn]"
             "(https://www.kaggle.com/datasets/blastchar/telco-customer-churn)"
         )
-        st.caption("Figures in `assets/figures` — regenerate with `generate_figure_assets.py`.")
+        st.caption(
+            "Figures in `assets/figures`. **`02_numeric_by_churn.png`** is created automatically if missing "
+            "(needs `data/Telco_churn_cleaned.csv`). Full set: `python generate_figure_assets.py`."
+        )
 
     st.title("Customer churn prediction")
 
