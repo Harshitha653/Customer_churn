@@ -8,11 +8,11 @@ from __future__ import annotations
 import io
 import random
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import ConfusionMatrixDisplay
 
@@ -88,8 +88,10 @@ def numeric_distribution_summary_by_churn(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def correlation_heatmap_interactive(df: pd.DataFrame) -> go.Figure:
-    """Full numeric correlation matrix as a zoomable Plotly heatmap."""
+def correlation_heatmap_interactive(df: pd.DataFrame) -> Any:
+    """Full numeric correlation matrix as a zoomable Plotly heatmap (requires `plotly`)."""
+    import plotly.graph_objects as go
+
     num = df.select_dtypes(include=[np.number]).copy()
     if "Churn" in num.columns:
         cols = [c for c in num.columns if c != "Churn"] + ["Churn"]
@@ -451,15 +453,27 @@ def render_eda() -> None:
         "**Use the chart:** drag a box with **Zoom** (toolbar) or **scroll** to zoom, **Pan** to move, "
         "**Home** to reset. Hover a cell for the exact **Pearson r**. Blue ≈ negative correlation, red ≈ positive."
     )
-    st.plotly_chart(
-        correlation_heatmap_interactive(eng.df_clean),
-        use_container_width=True,
-        config={
-            "scrollZoom": True,
-            "displayModeBar": True,
-            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-        },
-    )
+    try:
+        fig = correlation_heatmap_interactive(eng.df_clean)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": True,
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            },
+        )
+    except ImportError:
+        st.warning(
+            "**plotly** is not installed, so the interactive heatmap is unavailable. "
+            "Install with `pip install plotly` (see `requirements.txt`) and redeploy. "
+            "Showing the static heatmap below."
+        )
+        show_static_figure(
+            "09_correlation_heatmap.png",
+            "Static correlation heatmap — run `pip install plotly` for zoom/pan.",
+        )
     st.success(
         "**What it tells us:** feature groups cluster together (services, contract/payment flags, billing/tenure). "
         "It also highlights where **one-hot columns are mutually exclusive** (strong negative blocks) and where "
