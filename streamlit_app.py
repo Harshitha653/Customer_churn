@@ -799,7 +799,7 @@ def render_tldr() -> None:
         "- **Data:** Public IBM-style churn table on Kaggle; we use a **cleaned** CSV with engineered features.\n"
         "- **Prep:** One-hot categories, **balance** classes for training, **scale** inputs for logistic regression, "
         "hold out 20% for honest scores.\n"
-        "- **Models:** Naive baseline → **logistic regression** (clear, simulatable) vs. random forest & XGBoost "
+        "- **Models:** Naive baseline → **logistic regression** (clear, simulatable) vs. Naive Bayes, Random forest & XGBoost "
         "as benchmarks.\n"
         "- **Retention:** **Grades A–D** from risk + rough value at risk; **ranked “what-if” actions** re-score the customer.\n"
         "- **Trust:** **SHAP** bar + waterfall show **what is pulling this person toward churn**."
