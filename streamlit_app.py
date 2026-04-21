@@ -12,6 +12,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import ConfusionMatrixDisplay
 
@@ -85,6 +86,39 @@ def numeric_distribution_summary_by_churn(df: pd.DataFrame) -> pd.DataFrame:
             row["Median total ($)"] = float(sub["Total Charges"].median())
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def correlation_heatmap_interactive(df: pd.DataFrame) -> go.Figure:
+    """Full numeric correlation matrix as a zoomable Plotly heatmap."""
+    num = df.select_dtypes(include=[np.number]).copy()
+    if "Churn" in num.columns:
+        cols = [c for c in num.columns if c != "Churn"] + ["Churn"]
+        num = num[cols]
+    corr = num.corr()
+    labels = list(corr.columns)
+    n = len(labels)
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=corr.values,
+            x=labels,
+            y=labels,
+            colorscale="RdBu",
+            reversescale=True,
+            zmin=-1.0,
+            zmax=1.0,
+            hoverongaps=False,
+            hovertemplate="%{y} × %{x}<br>Pearson r = %{z:.3f}<extra></extra>",
+        )
+    )
+    h = int(min(900, max(480, 11 * n)))
+    fig.update_layout(
+        title="Correlation heatmap (numeric features)",
+        height=h,
+        margin=dict(l=120, r=40, t=60, b=140),
+        xaxis=dict(side="bottom", tickangle=-50, tickfont=dict(size=9)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
+    )
+    return fig
 
 
 def ensure_numeric_by_churn_figure() -> None:
@@ -255,11 +289,6 @@ def render_dataset() -> None:
     cat_cols = [c for c in df.columns if c not in num_cols]
     c1, c2 = st.columns(2)
     c1.metric("Numeric columns", len(num_cols))
-    c2.metric("Categorical / non-numeric columns", len(cat_cols))
-    with st.expander("Show numeric columns", expanded=False):
-        st.write(num_cols)
-    with st.expander("Show categorical / non-numeric columns", expanded=False):
-        st.write(cat_cols)
     # st.info(
     #     "**What we were looking for:** Does each row read like a real customer—who they are, "
     #     "what they bought, what they pay—and is “left vs. stayed” labeled clearly? "
@@ -318,7 +347,7 @@ def render_preprocessing() -> None:
         "- **`Churn Reason`:** Treated as **post-outcome / structural** missing for people who did not churn. "
         "We **do not include it** in the modeling table—using it would **leak** information tied to churn.\n"
         "- **`Total Charges` (in cleaning):** Stored as text in the raw file with blanks where tenure was 0; "
-        "we **coerced to numeric** and filled the small number of resulting NaNs with **`Monthly Charges`** "
+        "we **forced to numeric** and filled the small number of resulting NaNs with **`Monthly Charges`** "
         "(same idea as the course notebook: a brand-new account’s total spend should align with the current bill).\n"
         "- **Cleaned CSV:** The file the app trains on (`Telco_churn_cleaned.csv`) already reflects these fixes and "
         "does not carry `Churn Reason` as a feature."
@@ -410,17 +439,26 @@ def render_eda() -> None:
         "Strength of linear association with churn (engineered + raw numerics).",
     )
     st.success(
-        "**Goal:** spot drivers that line up with domain sense. **Finding:** several engineered "
-        "and billing fields correlate with churn; this guided feature work and matches later model emphasis."
+        "**Goal:** spot drivers that line up with domain sense. **Finding:** several engineered and billing-related "
+        "fields correlate with churn; this guided feature work and matches later model emphasis."
     )
 
     st.divider()
     st.header("What story does this data tell?")
 
-    st.subheader("Correlation heatmap (numeric features)")
-    show_static_figure(
-        "09_correlation_heatmap.png",
-        "Correlation among numeric/encoded fields (blue = negative, red = positive).",
+    st.subheader("Correlation heatmap (numeric features) — interactive")
+    st.markdown(
+        "**Use the chart:** drag a box with **Zoom** (toolbar) or **scroll** to zoom, **Pan** to move, "
+        "**Home** to reset. Hover a cell for the exact **Pearson r**. Blue ≈ negative correlation, red ≈ positive."
+    )
+    st.plotly_chart(
+        correlation_heatmap_interactive(eng.df_clean),
+        use_container_width=True,
+        config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        },
     )
     st.success(
         "**What it tells us:** feature groups cluster together (services, contract/payment flags, billing/tenure). "
@@ -428,9 +466,6 @@ def render_eda() -> None:
         "billing variables co-move (tenure ↔ total charges). This informs which features may be redundant and "
         "why linear models can still work well."
     )
-
-    st.subheader("Univariate (single-variable) highlights")
-    show_static_figure("01_churn_distribution.png", "Outcome balance (stay vs. churn).")
 
     st.subheader("Bivariate (relationship) highlights")
     show_static_figure(
