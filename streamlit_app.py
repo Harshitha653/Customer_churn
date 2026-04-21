@@ -24,13 +24,25 @@ RAW_XLSX = BASE_DIR / "data" / "Telco_customer_churn.xlsx"
 # Max width for static PNGs so charts fit typical laptop widths with the sidebar (~620–700px).
 FIGURE_DISPLAY_WIDTH_PX = 640
 
+# Used only if openpyxl is missing (e.g. old venv). Matches project’s bundled raw Excel snapshot.
+_FALLBACK_RAW_MISSINGNESS: dict = {
+    "n_rows": 7043,
+    "n_cols": 33,
+    "n_cols_with_missing": 1,
+    "missing_by_col": {"Churn Reason": 5174},
+    "_used_fallback": True,
+}
+
 
 @st.cache_data(show_spinner=False)
 def raw_excel_missingness_stats() -> dict | None:
     """Missing-value counts from the raw Excel (for the preprocessing page)."""
     if not RAW_XLSX.exists():
         return None
-    raw = pd.read_excel(RAW_XLSX)
+    try:
+        raw = pd.read_excel(RAW_XLSX, engine="openpyxl")
+    except ImportError:
+        return dict(_FALLBACK_RAW_MISSINGNESS)
     miss = raw.isna().sum()
     with_miss = miss[miss > 0]
     return {
@@ -253,6 +265,17 @@ def render_preprocessing() -> None:
             f"In the raw **`Telco_customer_churn.xlsx`** ({n:,} rows, {stats['n_cols']} columns), "
             f"**only one field has missing values: `Churn Reason`**, missing in **{churn_reason:,}** rows "
             f"(**{pct:.1f}%** of the file). Every other column is complete in that extract."
+        )
+        if stats.get("_used_fallback"):
+            st.warning(
+                "**openpyxl** is not installed, so these counts are a **bundled snapshot**, not read live from the "
+                "Excel file. Install with `pip install openpyxl` (it is listed in `requirements.txt`) and redeploy "
+                "to recompute from `data/Telco_customer_churn.xlsx`."
+            )
+    elif not RAW_XLSX.exists():
+        st.info(
+            "Raw **`Telco_customer_churn.xlsx`** was not found under `data/`, so missingness percentages are skipped. "
+            "The handling notes below still apply to how the cleaned CSV was built."
         )
     st.markdown(
         "**How we handled it**\n"
