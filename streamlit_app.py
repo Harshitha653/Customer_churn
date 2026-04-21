@@ -5,6 +5,7 @@ Static figures live in assets/figures (run generate_figure_assets.py if missing)
 
 from __future__ import annotations
 
+import io
 import random
 from pathlib import Path
 
@@ -19,6 +20,25 @@ from train_models import build_train_test
 
 BASE_DIR = Path(__file__).resolve().parent
 FIGURES_DIR = BASE_DIR / "assets" / "figures"
+RAW_XLSX = BASE_DIR / "data" / "Telco_customer_churn.xlsx"
+# Max width for static PNGs so charts fit typical laptop widths with the sidebar (~620–700px).
+FIGURE_DISPLAY_WIDTH_PX = 640
+
+
+@st.cache_data(show_spinner=False)
+def raw_excel_missingness_stats() -> dict | None:
+    """Missing-value counts from the raw Excel (for the preprocessing page)."""
+    if not RAW_XLSX.exists():
+        return None
+    raw = pd.read_excel(RAW_XLSX)
+    miss = raw.isna().sum()
+    with_miss = miss[miss > 0]
+    return {
+        "n_rows": int(len(raw)),
+        "n_cols": int(raw.shape[1]),
+        "n_cols_with_missing": int(len(with_miss)),
+        "missing_by_col": {str(k): int(v) for k, v in with_miss.items()},
+    }
 
 NAV_QUESTIONS = [
     "Why this project?",
@@ -36,10 +56,29 @@ def _fig_path(name: str) -> Path:
     return FIGURES_DIR / name
 
 
+def numeric_distribution_summary_by_churn(df: pd.DataFrame) -> pd.DataFrame:
+    """Table: counts and central tendency of key numerics split by Churn (0/1)."""
+    rows = []
+    n = len(df)
+    for val, label in [(0, "Stayed (0)"), (1, "Churned (1)")]:
+        sub = df[df["Churn"] == val]
+        row = {
+            "Churn status": label,
+            "Customers": len(sub),
+            "% of rows": round(100.0 * len(sub) / n, 2) if n else 0.0,
+            "Median tenure (mo)": float(sub["Tenure Months"].median()),
+            "Median monthly ($)": float(sub["Monthly Charges"].median()),
+        }
+        if "Total Charges" in df.columns:
+            row["Median total ($)"] = float(sub["Total Charges"].median())
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def show_static_figure(filename: str, caption: str | None = None) -> None:
     p = _fig_path(filename)
     if p.exists():
-        st.image(str(p), caption=caption, use_container_width=True)
+        st.image(str(p), caption=caption, width=FIGURE_DISPLAY_WIDTH_PX)
     else:
         st.warning(
             f"Figure **{filename}** was not found. From the project folder, run: "
@@ -48,7 +87,7 @@ def show_static_figure(filename: str, caption: str | None = None) -> None:
 
 
 def plot_confusion_matrix(cm: list, title: str):
-    fig, ax = plt.subplots(figsize=(4.2, 3.8))
+    fig, ax = plt.subplots(figsize=(3.5, 3.2))
     disp = ConfusionMatrixDisplay(
         confusion_matrix=np.array(cm),
         display_labels=["Stayed (0)", "Churned (1)"],
@@ -113,6 +152,66 @@ def render_dataset() -> None:
     )
     st.subheader("Preview: first rows (head)")
     st.dataframe(df.head(), use_container_width=True)
+
+    st.subheader("Summary in plain language")
+    st.markdown(
+        "The cleaned file is almost entirely **numeric flags and amounts** (categories were turned into 0/1 columns). "
+        "Below is a **readable snapshot** of the fields that matter most for “who pays what” and “how long they’ve stayed”—"
+        "not a wall of `describe()` output."
+    )
+    story_cols = [
+        "Tenure Months",
+        "Monthly Charges",
+        "Total Charges",
+        "Avg Monthly Spend",
+        "Bill_Shock_Ratio",
+        "Churn",
+    ]
+    present = [c for c in story_cols if c in df.columns]
+    rows = []
+    for col in present:
+        s = df[col]
+        label = col.replace("_", " ")
+        rows.append(
+            {
+                "Field": label,
+                "Typical (median)": float(s.median()),
+                "Average (mean)": float(s.mean()),
+                "Low": float(s.min()),
+                "High": float(s.max()),
+            }
+        )
+    snap = pd.DataFrame(rows)
+    st.dataframe(
+        snap.round(3),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.markdown(
+        "**How to read this**\n"
+        "- **Tenure / charges / totals** — if the **average** is noticeably higher than the **typical (median)** value, "
+        "a minority of high bills or long tenures are pulling the mean up.\n"
+        "- **Churn** — the **average** is the share who churned (matches the headline churn rate). The median is just "
+        "the “middle” label (0 or 1) and is less informative for storytelling.\n"
+        "- **Avg Monthly Spend / Bill shock** — engineered fields; see *Data preparation* and *What story does this data tell?* "
+        "for what they capture."
+    )
+
+    with st.expander("Detailed numeric summary (all numeric columns)", expanded=False):
+        num_only = df.select_dtypes(include=[np.number])
+        st.caption("Same information as `describe()`, but limited to numeric columns and rounded for scanning.")
+        st.dataframe(num_only.describe().T.round(4), use_container_width=True)
+
+    st.subheader("Feature types (numeric vs. categorical)")
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in df.columns if c not in num_cols]
+    c1, c2 = st.columns(2)
+    c1.metric("Numeric columns", len(num_cols))
+    c2.metric("Categorical / non-numeric columns", len(cat_cols))
+    with st.expander("Show numeric columns", expanded=False):
+        st.write(num_cols)
+    with st.expander("Show categorical / non-numeric columns", expanded=False):
+        st.write(cat_cols)
     # st.info(
     #     "**What we were looking for:** Does each row read like a real customer—who they are, "
     #     "what they bought, what they pay—and is “left vs. stayed” labeled clearly? "
@@ -143,6 +242,27 @@ def render_preprocessing() -> None:
         "Missing or inconsistent entries were fixed in the notebooks; categorical fields were "
         "turned into **one-hot** columns (each category becomes its own 0/1 flag) so models can "
         "measure the effect of, say, fiber internet vs. DSL."
+    )
+    st.subheader("Missing values — how much, and how we handled it")
+    stats = raw_excel_missingness_stats()
+    if stats:
+        n = stats["n_rows"]
+        churn_reason = stats["missing_by_col"].get("Churn Reason", 0)
+        pct = 100.0 * churn_reason / n if n else 0.0
+        st.markdown(
+            f"In the raw **`Telco_customer_churn.xlsx`** ({n:,} rows, {stats['n_cols']} columns), "
+            f"**only one field has missing values: `Churn Reason`**, missing in **{churn_reason:,}** rows "
+            f"(**{pct:.1f}%** of the file). Every other column is complete in that extract."
+        )
+    st.markdown(
+        "**How we handled it**\n"
+        "- **`Churn Reason`:** Treated as **post-outcome / structural** missing for people who did not churn. "
+        "We **do not include it** in the modeling table—using it would **leak** information tied to churn.\n"
+        "- **`Total Charges` (in cleaning):** Stored as text in the raw file with blanks where tenure was 0; "
+        "we **coerced to numeric** and filled the small number of resulting NaNs with **`Monthly Charges`** "
+        "(same idea as the course notebook: a brand-new account’s total spend should align with the current bill).\n"
+        "- **Cleaned CSV:** The file the app trains on (`Telco_churn_cleaned.csv`) already reflects these fixes and "
+        "does not carry `Churn Reason` as a feature."
     )
     with st.expander("Why one-hot encoding?", expanded=False):
         st.markdown(
@@ -202,18 +322,27 @@ def render_eda() -> None:
         "read metrics carefully."
     )
 
-    st.subheader("Tenure — do leavers look newer?")
-    show_static_figure("02_tenure_by_churn.png", "Distribution of tenure for stay vs. churn.")
-    st.success(
-        "**Goal:** test the intuition that newer accounts are shakier. **Finding:** churned customers "
-        "tend to have **lower tenure** on average—useful for prioritizing onboarding and early outreach."
+    st.subheader("Numeric distributions by churn status")
+    st.markdown(
+        "**What this is:** `Churn` is 0 (stayed) or 1 (left). The **table** summarizes how many customers fall in "
+        "each group and the **typical** tenure and bill in each. The **chart** shows the **full distribution** "
+        "(histograms) of tenure and monthly charges for stayed vs churned—more detail than a box plot about "
+        "where the mass of customers sits."
     )
-
-    st.subheader("Monthly charges — bill stress")
-    show_static_figure("03_monthly_charges_by_churn.png", "Monthly bill for stay vs. churn.")
+    eng = get_engine()
+    st.dataframe(
+        numeric_distribution_summary_by_churn(eng.df_clean).round(3),
+        use_container_width=True,
+        hide_index=True,
+    )
+    show_static_figure(
+        "02_numeric_by_churn.png",
+        "Overlapping histograms: tenure (top) and monthly charges (bottom), stayed vs churned.",
+    )
     st.success(
-        "**Goal:** see if churn aligns with higher bills. **Finding:** churned customers often sit "
-        "higher on the monthly-charge scale—pricing and perceived value are plausible levers."
+        "**Reading the shapes:** churned customers often pile up at **shorter tenure** and can sit **higher** on "
+        "monthly charges—consistent with newer, higher-bill accounts leaving. The table’s medians make that "
+        "comparison explicit without hiding skew."
     )
 
     st.subheader("Which numeric fields move with churn?")
@@ -225,6 +354,67 @@ def render_eda() -> None:
         "**Goal:** spot drivers that line up with domain sense. **Finding:** several engineered "
         "and billing fields correlate with churn; this guided feature work and matches later model emphasis."
     )
+
+    st.divider()
+    st.header("What story does this data tell?")
+
+    st.subheader("Correlation heatmap (numeric features)")
+    show_static_figure(
+        "09_correlation_heatmap.png",
+        "Correlation among numeric/encoded fields (blue = negative, red = positive).",
+    )
+    st.success(
+        "**What it tells us:** feature groups cluster together (services, contract/payment flags, billing/tenure). "
+        "It also highlights where **one-hot columns are mutually exclusive** (strong negative blocks) and where "
+        "billing variables co-move (tenure ↔ total charges). This informs which features may be redundant and "
+        "why linear models can still work well."
+    )
+
+    st.subheader("Univariate (single-variable) highlights")
+    show_static_figure("01_churn_distribution.png", "Outcome balance (stay vs. churn).")
+
+    st.subheader("Bivariate (relationship) highlights")
+    show_static_figure(
+        "10_churn_rate_contract_month_to_month.png",
+        "Month-to-month contract flag vs churn rate.",
+    )
+    show_static_figure(
+        "11_churn_rate_electronic_check.png",
+        "Electronic check payment flag vs churn rate.",
+    )
+    show_static_figure(
+        "12_churn_rate_fiber_optic.png",
+        "Fiber optic internet flag vs churn rate.",
+    )
+    st.success(
+        "**Takeaway:** the biggest churn lifts concentrate in **month-to-month contracts**, **electronic check**, "
+        "and **fiber optic** customers—exactly the kinds of levers that translate into actionable retention plays."
+    )
+
+    st.subheader("Feature engineering (after EDA)")
+    st.markdown(
+        "We engineered a few columns to convert raw billing/service facts into **signals a model can learn from** "
+        "and a human can interpret."
+    )
+    st.markdown(
+        "**Preprocessing & Feature Engineering Summary**\n"
+        "- **Created new columns** (ratios/aggregates) to capture patterns like bill shock and service bundle size.\n"
+        "- **Encoded categoricals** using one-hot columns so models can learn per-category effects.\n"
+        "- **Scaled numeric features** for logistic regression so coefficients are comparable.\n"
+    )
+    with st.expander("Engineered Features Detail & Rationale", expanded=False):
+        st.markdown(
+            "- **Avg Monthly Spend**: `Total Charges / Tenure Months` (with safe handling for tenure=0).  \n"
+            "  **Why**: estimates a customer’s historical typical bill; provides baseline context.\n"
+            "- **Bill_Shock_Ratio**: `Monthly Charges / Avg Monthly Spend`.  \n"
+            "  **Why**: detects “bill shock” (current bill higher than historical average), a common churn trigger.\n"
+            "- **Tenure Group**: bucketed tenure.  \n"
+            "  **Why**: captures non-linear lifecycle effects (early churn risk vs. long-term stability).\n"
+            "- **Total_Addon_Services**: count of add-on services (security/backup/support/streaming…).  \n"
+            "  **Why**: approximates product stickiness / bundle depth.\n"
+            "- **Is_Auto_Pay**: derived from payment method flags.  \n"
+            "  **Why**: auto-pay reduces friction; often correlates with retention.\n"
+        )
 
 
 def model_rationale_block(selected: str) -> None:
@@ -298,8 +488,11 @@ def render_models() -> None:
     cm = bundle["confusion_matrices"][selected]
     st.markdown("**Confusion matrix** — counts of predicted vs. actual labels on the held-out 20%.")
     fig = plot_confusion_matrix(cm, selected)
-    st.pyplot(fig)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
     plt.close(fig)
+    buf.seek(0)
+    st.image(buf, width=FIGURE_DISPLAY_WIDTH_PX)
     st.success(
         "**How to read it:** top-left and bottom-right are “got it right” for stay and churn; off-diagonal cells "
         "are costly mistakes—either waving through a leaver or alarming a loyal customer."
@@ -413,9 +606,9 @@ def render_decision_engine() -> None:
     else:
         st.info("No eligible counterfactual actions for this profile.")
 
-    if result.get("recommended_table") is not None and not result["recommended_table"].empty:
-        st.markdown("**Combined view** (combo + top singles when single actions don’t clear the risk bar)")
-        st.dataframe(result["recommended_table"], use_container_width=True, hide_index=True)
+    # if result.get("recommended_table") is not None and not result["recommended_table"].empty:
+    #     st.markdown("**Combined view** (combo + top singles when single actions don’t clear the risk bar)")
+    #     st.dataframe(result["recommended_table"], use_container_width=True, hide_index=True)
 
     st.subheader("Batch spot-check")
     n = st.slider("How many random at-risk rows?", 1, 20, 5, key="batch_n")
@@ -449,9 +642,10 @@ def render_decision_engine() -> None:
 def render_shap_churn_drivers() -> None:
     st.header("What drives a customer to churn?")
     st.markdown(
-        "We use **SHAP** (SHapley Additive exPlanations) to show how much each input pushes the model’s "
-        "churn risk **up or down** compared with a typical account—globally across many customers, and for "
-        "one example customer in the waterfall chart."
+        "We use **SHAP** (SHapley Additive exPlanations) to explain **why** the logistic regression flags a customer.\n\n"
+        "Important detail: for logistic regression, **SHAP explains the model’s log-odds score** (the value *before* "
+        "the sigmoid turns it into a probability). So SHAP answers: **which features pushed this customer’s score "
+        "above or below a typical baseline**."
     )
 
     st.subheader("Global view — average impact direction")
@@ -460,8 +654,8 @@ def render_shap_churn_drivers() -> None:
         "Average SHAP magnitude across many held-out customers (logistic regression).",
     )
     st.success(
-        "**What we wanted:** a sanity check that important drivers match business intuition (contract, tenure, charges). "
-        "**What we see:** a handful of fields dominate—useful for training reps on what to discuss first."
+        "**What it means:** this is a ranked list of the **strongest levers** in the model on average. "
+        "It’s great for training and prioritization (what topics matter most), but it’s not yet a per-customer story."
     )
 
     st.subheader("Local view — one customer waterfall")
@@ -470,15 +664,19 @@ def render_shap_churn_drivers() -> None:
         "How each feature nudges risk for one high-scoring account.",
     )
     st.success(
-        "**What we wanted:** a story for a single account—why *this* person is flagged. **What we see:** "
-        "features stack into a final uplift over the baseline; pairs well with the decision engine’s recommended actions."
+        "**How to read it:** start at the **baseline log-odds** (typical customer). Each bar is a feature contribution "
+        "(red pushes churn risk **up**, blue pushes it **down**). Add them up to get the customer’s final score; "
+        "that final score maps to the churn probability shown elsewhere."
     )
 
     with st.expander("Optional: tiny bit of theory (still no heavy math)", expanded=False):
         st.markdown(
-            "SHAP values are built from fair “credit sharing” ideas: each feature’s contribution is measured by "
-            "how much it changes the model output when combined with different subsets of other features. "
-            "For our logistic model, specialized linear SHAP is fast and stable."
+            "**Did we do it correctly?** Yes — using `shap.LinearExplainer` for `sklearn` logistic regression is the "
+            "standard choice, and the SHAP values sum back to the model margin (log-odds) under the explainer’s "
+            "baseline convention.\n\n"
+            "**Why SHAP helps the story:** coefficients tell you global direction (“month-to-month increases risk”), "
+            "but SHAP turns that into a **case narrative** (“this customer is high-risk mainly because they are "
+            "month-to-month + have low tenure + pay by electronic check”)."
         )
 
 
@@ -527,7 +725,7 @@ def main() -> None:
         )
         st.caption("Figures in `assets/figures` — regenerate with `generate_figure_assets.py`.")
 
-    st.title("Telco churn — STT811 project walkthrough")
+    st.title("Customer churn prediction")
 
     if page == NAV_QUESTIONS[0]:
         render_intro()
